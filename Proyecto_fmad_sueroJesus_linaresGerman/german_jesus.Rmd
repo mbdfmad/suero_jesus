@@ -1,0 +1,489 @@
+---
+always_allow_html: yes
+leafletmap: true
+output:
+  output: github_document
+title: "Proyecto Fundamentos  Matemáticos  del  Análisis  de  Datos."
+subtitle: 'Melbourne Housing Market'
+date: 'Curso 2020-21. Última actualización: `r format(Sys.time(), "%Y-%m-%d")`'
+author: 'Jesús Suero & Germán Linares' 
+---
+
+# Introducción
+
+En este documento elaborado por Jesús Suero y Germán Linares se desarrolla el proyecto para la asignatura de Fundamentos Matemáticos del Análisis de Datos del Máster de Big Data de ICAI.
+
+Se va a analizar un dataset llamado Melbourne Housing Market y obtenido de Kaggle en [este enlace](https://www.kaggle.com/anthonypino/melbourne-housing-market).
+
+El dataset incluye datos sobre viviendas puestas a la venta en el mercado inmobiliario de Melbourne (Australia), precio de venta, dirección, barrio, número de habitaciones, agente inmobiliario...
+
+
+
+## Preliminares
+
++ Se limpia el directorio de trabajo y se cargan las librerías que se van a usar:
+
+```{r}
+rm(list = ls())
+library(tidyverse)
+library(leaflet)
+library(corrplot)
+library(GGally)
+library(MLTools)
+library(caret)
+```
+
++ Se carga el dataset y se guarda en la variable housing:
+
+```{r}
+housing <- read_csv('data/Melbourne_housing_FULL.csv')
+```
+
+
+# Análisis del dataset
+
+## Tipos de variables
+
+El dataset original se compone de 34857 observaciones distribuidas en 21 variables.
+
+Se observa la distribución de las variables mediante el comando summary: si es numérica o categórica, entre que valores se mueve, su media...
+
+```{r}
+summary(housing)
+```
+
+A continuación, se proporciona una descripción de cada una de las variables presentes en el dataset:
+
++ Suburb: Barrio en el que se sitúa la vivienda (categórica)
++ Address: Dirección de la vivienda (categórica)
++ Rooms: Número de habitaciones de la vivienda (discreta)
++ Type: Tipo de vivienda (categórica)
+      h - house, cottage, villa, semi, terrace 
+      u - unit, duplex
+      t - townhouse
++ Price: Precio en dólares australianos de la vivienda (continua)
++ Method: Método de venta de la vivienda (categórica)
+      S - property sold 
+      SP - property sold prior 
+      PI - property passed in 
+      PN - sold prior not disclosed 
+      SN - sold not disclosed
+      VB - vendor bid; 
+      W - withdrawn prior to auction
+      SA - sold after auction 
+      SS - sold after auction price not disclosed 
++ SellerG: Agente inmobiliario (categórica)
++ Date: Fecha de venta (categórica)
++ Distance: Distancia al Central Business District de Melbourne (continua)
++ Postcode: Código postal (categórica)
++ Bedroom2: Número de habitaciones, dato scraped de otra fuente (discreta)
++ Bathroom: Número de baños (discreta)
++ Car: Número de plazas de garaje (discreta)
++ Landsize: Tamaño del terreno en metros (continua)
++ Building Area: Tamaño construido en metros (continua)
++ YearBuilt: Año de contrucción de la vivienda (discreta)
++ CouncilArea: Ayuntamiento al que pertecene (categórica)
++ Latitude: Latitud en la que se sitúa la vivienda (continua)
++ Longitude: Longitud en la que se sitúa la vivienda (continua)
++ Regionname: Región en la que se sitúa la vivienda (categórica)
++ Propertycount: Número de propiedades que hay en ese Barrio (discreta)
+
+
+## Tratamiento de valores ausentes (NAs)
+
+Tal y como se vio en el summary existen bastantes registros con valores NAs en alguna de sus variables, se va a proceder a eliminarlos según diferentes criterios.
+
+Se eliminan todas las observaciones con NAs en la columna Price.
+
+```{r}
+housing = housing %>% 
+  drop_na(Price)
+```
+
+Ahora hay un total de 27247 observaciones, se ejecuta un summary para ver la distribucion de NAs.
+
+```{r}
+summary(housing)
+```
+
+Se decide eliminar los valores ausentes presentes en las columnas con pocos NAs.
+
+```{r}
+housing = housing %>% 
+  drop_na(Distance, Postcode, Propertycount)
+```
+
+Se eliminan ahora del dataset las columnas BuildingArea y Yearbuilt debido al alto porcentaje de NAs que contienen.
+
+```{r}
+housing$BuildingArea = NULL
+housing$YearBuilt = NULL
+```
+
+Parece que coindicen las observaciones NAs de las variables Car, Bathroom y Bedroom2 (cuando una observación tiene una de estas variables ausentes, tiene todas ellas). Además, la variable que Landsize tiene un elevado número de valores ausentes.
+Por tanto, se eliminan las observaciones con NAs en las variables comentadas.
+
+```{r}
+housing = housing %>% 
+  drop_na(Landsize, Car, Bathroom, Bedroom2)
+```
+
+Se comprueba si queda algún valor ausente en la tabla:
+
+```{r}
+apply(is.na(housing),2,which)
+```
+
+Existen 22 registros NAs comunes en las variables Lattitude y Longitude, se procede con su eliminación.
+
+```{r}
+housing = housing %>% 
+  drop_na(Lattitude, Longtitude)
+```
+
+Se comprueba que ya no queda ningún valor ausente en la tabla:
+
+```{r}
+any(is.na(housing))
+```
+
+
+## Estudio de variables
+
+### Variable Address
+Se quiere ver cuántos valores únicos tiene la variable Address por si se pudiera dividir de alguna forma:
+
+```{r}
+length(unique(housing$Address))
+```
+
+La granularidad de Address es muy alta, por lo que agrupaciones por Address proporcionaran demasiados resultados. Debido a esto, se decide eliminar la columna porque no aportará información de utilidad.
+
+```{r}
+housing$Address = NULL
+```
+
+
+### Variable Suburb
+
+Se convierte la variable a factor y se muestra cuántos niveles tiene, indicando de esta forma el número de suburbios entre los que se distribuyen las viviendas.
+
+```{r}
+housing$Suburb = as.factor(housing$Suburb)
+length(levels(housing$Suburb))
+```
+
+
+### Variable Rooms
+
+Se muestra la frecuencia absoluta para la variable Rooms, indicando cuantas viviendas hay para un número de habitaciones. Los valores se distribuyen entre 1 y 12 concentrándose entre 1 y 5.
+
+```{r}
+table(housing$Rooms)
+```
+
+
+### Variable Car
+
+Esta variable indica el número de plazas de aparcamiento que tiene una vivienda. Se decide convertirla a factor y dividirla en dos niveles en función de si tiene (YES) o no (NO) plaza de aparcamiento.
+
+```{r}
+housing$Car = as.factor(housing$Car)
+levels(housing$Car) = c("NO", "YES", "YES", "YES", "YES", "YES", "YES", "YES", "YES", "YES", "YES", "YES", "YES", "YES", "YES")
+levels(housing$Car)
+```
+
+
+### Variable Regionname
+
+Se convierte la variable Regionname a factor y se muestra sus niveles, observándose 8 niveles.
+
+```{r}
+housing$Regionname = as.factor(housing$Regionname)
+levels(housing$Regionname)
+```
+
+
+### Variable SellerG
+
+Para esta variable se va a hacer un estudio detallado en el que se descubrirá quiénes son los vendedores que más venden y dónde se sitúan las viviendas vendidas por ellos.
+
+En primer lugar, se calcula el número de viviendas vendidas por cada vendedor y el porcentaje que representa respecto al total. Se muestran los 5 vendedores con más viviendas.
+
+```{r}
+TopSellers = housing %>% 
+  group_by(SellerG) %>% 
+  dplyr::summarise(numberofhouses_sold = n()) %>% 
+  mutate(percentageSold = round((numberofhouses_sold*100)/nrow(housing),2)) %>% 
+  arrange(desc(percentageSold))
+head(TopSellers, 5)
+```
+
+Nelson es el seller con más viviendas, se calcula ahora el numero de viviendas vendidas por Nelson para cada región y la probabilidad de que haya vendido viviendas en cada una.
+
+```{r}
+housing %>% 
+  filter(SellerG == "Nelson") %>% 
+  group_by(Regionname) %>% 
+  dplyr::summarise(houses_by_nelson = n()) %>% 
+  mutate(prob = round((houses_by_nelson / sum(houses_by_nelson)*100),2))
+```
+
+A continuación, se muestra un gráfico de barras con los 5 vendedores con más viviendas, mostrando cuántas tiene cada uno ordenadas de mayor a menor.
+
+```{r}
+sellerData = housing %>%
+             group_by(SellerG) %>% 
+             dplyr::summarise(CountPerSeller = n()) %>%
+             arrange(desc(CountPerSeller))
+
+sellerData = sellerData[0:5,]
+
+ggplot(sellerData, aes(x = reorder(SellerG, CountPerSeller), 
+                     y = CountPerSeller)) +
+  geom_bar(stat='identity',colour="black", fill = '#f5a742') +
+  geom_text(aes(x = SellerG, y = 1, label = paste0("(",CountPerSeller,")",sep="")),
+            hjust=0, vjust=0.5, size = 4, colour = 'black',
+            fontface = 'bold') +
+  labs(x = 'Seller', y = 'Nº viviendas', title = 'Top 5 vendedores por nº de viviendas') +
+  coord_flip()
+```
+
+Por último, se va a representar (usando la librería leaflet) en un mapa donde se encuentran las viviendas vendidas por los 5 vendedores con más viviendas. Cada punto en el mapa es una vivienda (situada según sus valores de latitud y longitud) y cada color representa cada uno de los 5 vendedores. 
+
+```{r}
+Sellers = c(head(as.character(sellerData$SellerG),5))
+
+SellersTop = housing %>% 
+  filter(SellerG %in% Sellers)
+
+center_lon = median(SellersTop$Longtitude)
+center_lat = median(SellersTop$Lattitude)
+
+pal <- colorFactor(
+  palette = c('red', 'blue', 'green', 'purple', 'black'),
+  domain = SellersTop$SellerG
+)
+
+leaflet(SellersTop) %>% addTiles() %>%
+  addCircles(lng = ~Longtitude, lat = ~Lattitude,radius = 3,
+             color = ~pal(SellerG))  %>%
+  addLegend("bottomright", pal = pal, values = ~SellerG,
+    title = "Distribución de viviendas Top 5 sellers",
+    opacity = 1
+  ) %>%
+  # controls
+  setView(lng=center_lon, lat=center_lat, zoom=10)
+```
+
+
+
+# Estudio de variables según su relación con la variable Precio
+
++ Se estudia como cambia el precio según el número de habitaciones que tenga la vivienda. Para ello mediante el siguiente gráfico se muestra el precio medio de las viviendas en función del número de habitaciones que tiene.
+
+```{r}
+roomData = housing %>%
+  group_by(Rooms) %>% 
+  dplyr::summarise(AvgPricePerRoom = mean(Price)) %>%
+  arrange(desc(Rooms))
+  
+ggplot(roomData, aes(x = Rooms,y = AvgPricePerRoom)) +
+  scale_x_continuous(breaks=c(0,2,4,6,8,10,12,14,16,18,20)) +
+  geom_bar(stat='identity',colour="black", fill = '#f5a742') +
+  labs(x = 'Nº. Habitaciones', y = 'Precio', title = 'Precio medio según el nº de habitaciones')
+```
+
+Se observa que el precio aumenta cuanto mayor sea el número de habitaciones hasta 6.
+
++ Para la variable Car se va a estudiar si cambia el precio medio de las viviendas según si tienen plaza de aparcamiento o no.
+
+```{r}
+carData = housing %>%
+  group_by(Car) %>% 
+  dplyr::summarise(AvgPriceCar = mean(Price))
+  
+ggplot(carData, aes(x = Car,y = AvgPriceCar, fill = Car)) +
+  geom_bar(stat='identity', color='black') +
+  labs(x = 'Tiene plaza de aparcamiento?', y = 'Precio', title = 'Precio medio en función de si tiene o no plaza de aparcamiento')
+```
+
+Parece que el precio se incrementa algo cuando tiene plaza de aparcamiento, pero no hay una diferencia considerable.
+
++ Se va a analizar cómo cambia el precio de las viviendas según el Suburbio en el que estén situadas. En la variable suburbData se guardan el nombre del suburbio y el precio medio de las viviendas que pertenecen a él (AvgPricePerSuburb). Además se ordenan de mayor a menor y se le añade el símbolo del dolar.
+
+```{r}
+suburbData = housing %>%
+             group_by(Suburb) %>% 
+             dplyr::summarise(AvgPricePerSuburb = round(median(Price),0)) %>%
+             arrange(desc(AvgPricePerSuburb))
+
+suburbData$AvgPriceSuburb = scales::dollar(suburbData$AvgPricePerSuburb)
+```
+
+Con los datos de los suburbios más caros se crea un gráfico de barras en el que se muestran los 10 más caros, indicando su precio y el nombre.
+
+```{r}
+suburbData = suburbData[0:10,]
+
+ggplot(suburbData, aes(x = reorder(Suburb, AvgPricePerSuburb), 
+                     y = AvgPricePerSuburb)) +
+  geom_bar(stat='identity',colour="white", fill = '#f5a742') +
+  geom_text(aes(x = Suburb, y = 1, label = paste0("(",AvgPriceSuburb,")",sep="")),
+            hjust=0, vjust=.5, size = 4, colour = 'black',
+            fontface = 'bold') +
+  labs(x = 'Suburbio', y = 'Precio', title = 'Precio medio por Suburbio') +
+  coord_flip()
+```
+
+Se seleccionan del dataset los registros de los 10 suburbios más caros y mediante su latitud y longitud se representan en un mapa con la librería leaflet, donde cada punto es una vivienda y cada color un suburbio en concreto. Se puede apreciar dónde se sitúan las viviendas más caras en la ciudad de Melbourne.
+
+```{r}
+Suburbs = c(head(as.character(suburbData$Suburb),10))
+
+SuburbsTop = housing %>% 
+  filter(Suburb %in% Suburbs)
+
+center_lon = median(SuburbsTop$Longtitude)
+center_lat = median(SuburbsTop$Lattitude)
+
+pal <- colorFactor(
+  palette = 'plasma',
+  domain = SuburbsTop$Suburb
+)
+
+leaflet(SuburbsTop) %>% addTiles() %>%
+  addCircles(lng = ~Longtitude, lat = ~Lattitude,radius = 3,
+             color = ~pal(Suburb))  %>%
+  addLegend("bottomright", pal = pal, values = ~Suburb,
+    title = "Distribución de viviendas Top 10 Suburbios",
+    opacity = 1
+  ) %>%
+  # controls
+  setView(lng=center_lon, lat=center_lat, zoom=11)
+```
+
++ Ahora se va a representar cómo cambia el precio según la fecha en la que se haya vendido la vivienda. Para ello se representa en el eje X la fecha de venta (variable convertida a tipo Date) y en el eje Y el precio de venta.
+
+```{r}
+housingDate = housing
+housingDate$Date = as.Date(housingDate$Date,format = "%d/%m/%Y")
+price_trend = housingDate %>% 
+  group_by(Date) %>% 
+  dplyr::summarise(Average = sum(Price)/n())  
+  
+ggplot(price_trend, aes(x = Date, y = Average)) + 
+  geom_line(color = "steelblue")
+```
+
+Se aprecian datos algo más elevado cuanto más posterior es la fecha, pero no se identifica ninguna tendencia concreta en la variación del precio, probablemente porque el lapso de tiempo es de algo más de dos años.
+
++ En la siguiente representación se muestra mediante boxplots cómo cambia el precio y entre qué valores se mueve en función de la región a la que pertenece la vivienda.
+
+```{r}
+housing %>%
+  ggplot(aes(x=Regionname, y = Price, fill=Regionname)) +
+  geom_boxplot()+
+  coord_flip()
+```
+
+Se aprecian regiones con un precio más elevado que otras, Southern Metropolitan (en azul) parece ser la región más cara.
+
++ Se representa también la variación del precio según el tipo de vivienda mediante boxplots de diferentes colores.
+
+```{r}
+housing %>%
+  ggplot(aes(x=Type, y = Price, fill=Type)) +
+  geom_boxplot()
+```
+
+Se puede comprobar que el tipo de vivienda influye claramente en el precio, siendo más elevado para el tipo h (house) que para el u (unit). Más cara para una casa que para un apartamento.
+
++ Se hace el mismo tipo de representación de la variable método de venta frente al precio para ver su influencia y si tiene relación.
+
+```{r}
+housing %>%
+  ggplot(aes(x=Method, y = Price, fill=Method)) +
+  geom_boxplot()
+```
+
++ A continuación, se estudia la distribución de la variable Distancia, que indica la distancia al distrito de negocios de Melbourne y se representa de nuevo junto al precio mediante un diagrama de dispersión. 
+
+```{r}
+housing %>% 
+  ggplot(data = housing, mapping = aes(x = Distance, y = Price)) +
+  geom_point() +
+  geom_smooth(se = FALSE)
+```
+
+Se aprecia una relación negativa, a menor distancia mayor puede ser el precio de las viviendas. Las viviendas con precio más elevado en ningún caso se encuentran cercanas al centro de negocios.
+
++ Por último, se analizará como están distribuidos los valores de la variable Price mediante un histograma y una curva de densidad.
+
+```{r}
+housing %>% 
+  ggplot(aes(x=Price))+
+  geom_histogram(aes(y=stat(density)), fill="steelblue", color = "black") + 
+  geom_density(color="red", size=1.5)
+```
+
+Los valores se concentran en las viviendas de un millón de dólares, y cuanto mayor es el precio menos viviendas hay con precio elevado.
+
+
+
+# Modelo de prediccion de precio (incompleto - aún por modificar)
+
+Vamos a trabajar con un subconjunto de las variables para determinar su influencia en el valor del precio.
+
+```{r}
+house_data = housing %>% 
+  select(Suburb, Regionname, Rooms, Bathroom, Car, Type, Method, SellerG, Distance, Landsize, Propertycount, Price)
+```
+
+```{r}
+numvars <- sapply(house_data, class) %in% c("integer","numeric")
+C <- cor(house_data[,numvars])
+corrplot::corrplot(C, method = "circle")
+```
+
+Segun el analisis anterior decidimos seleccionar un subconjunto de variables mas influyentes en el precio para hacer un analisis de prediccion de precios mediante un modelo de regresion lineal.
+
+```{r}
+fdata = select(house_data, Regionname, Rooms, Car, Type, Distance, Price)
+```
+
+```{r}
+# Construyendo el modelo
+modelo = lm(Price ~ ., data = fdata)
+modelo$coefficients
+```
+
+```{r}
+summary(modelo)
+```
+
+```{r}
+# normalidad de los residuo
+plotModelo = plot(modelo, which = 2, pch=19)
+qqline(modelo$residuals, col="blue")   
+```
+
+
+
+```{r}
+plotModelo = plot(modelo, which = 1, pch=19, lwd= 12)
+segments(x0 = c(2.3, 2.3), y0 = c(1, -1), x1 = c(3.7, 3.7), y1 = c(3, -2), 
+         lty=3, lwd=12, col="blue")
+```
+
+```{r}
+# Gráfico scale-location. 
+plotModelo = plot(modelo, which = 3, pch=19)
+```
+
+```{r}
+# Usando predict
+predict(modelo, newdata = data.frame(Regionname= 'Southern Metropolitan', Rooms=4, Car='YES', Type='h' , Distance=43))
+```
+
+
