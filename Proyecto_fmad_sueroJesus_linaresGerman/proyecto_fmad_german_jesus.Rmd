@@ -1,8 +1,11 @@
 ---
 always_allow_html: yes
 leafletmap: true
+
 output:
-  output: github_document
+  html_document:
+    keep_md: true
+
 title: "Proyecto Fundamentos  Matemáticos  del  Análisis  de  Datos."
 subtitle: 'Melbourne Housing Market'
 date: 'Curso 2020-21. Última actualización: `r format(Sys.time(), "%Y-%m-%d")`'
@@ -30,6 +33,7 @@ library(leaflet)
 library(corrplot)
 library(GGally)
 library(MLTools)
+library(car)
 library(caret)
 ```
 
@@ -430,60 +434,192 @@ housing %>%
 Los valores se concentran en las viviendas de un millón de dólares, y cuanto mayor es el precio menos viviendas hay con precio elevado.
 
 
+# Modelo de prediccion de precio
 
-# Modelo de prediccion de precio (incompleto - aún por modificar)
+Según el análisis anterior llevado a cabo se decidide seleccionar un subconjunto de variables más influyentes en el precio para hacer un análisis de predicción de precios mediante un modelo de regresión lineal.
 
-Vamos a trabajar con un subconjunto de las variables para determinar su influencia en el valor del precio.
+De las 21 variables iniciales hemos decididos utilizar 13 para la predicción del precio de las viviendas. El razonamiento para la eliminación de las variables que faltan es el siguiente:
+
+- Eliminamos las columnas BuildingArea y Yearbuilt debido al alto porcentaje de NAs
+- Como mencionamos anteriormente, la granularidad de Address es muy alta, por lo que agrupaciones por Address proporcionaran demasiados resultados.
+- Suburb, CouncilArea y Date presentan el mismo problema de granularidad que Address, decidimos utilizar Regionname como variable geográfica con suficientes registros en los niveles del factor. 
+- Bedroom2 está correlacionada con Rooms y al tener NAs en sus registros y Rooms no, decidimos quedarnos con Rooms por fiabilidad.
+- SellerG provoca problemas al incluirse en el modelo como factor debido a no hay registros suficientes en todos los niveles al crear el training y el test, además de generar un número muy elevado de factores.
+
+Se crea la variable fdata con el conjunto de variables a utilizar
 
 ```{r}
-house_data = housing %>% 
-  select(Suburb, Regionname, Rooms, Bathroom, Car, Type, Method, SellerG, Distance, Landsize, Propertycount, Price)
+fdata = select(housing, Rooms , Type , Method , Distance , 
+    Postcode , Bathroom , Car , Landsize , Regionname,
+    Lattitude , Longtitude , Propertycount, Price)
 ```
 
+A continuación, se muestra un gráfico de correlación entre las variables numéricas del dataframe.
+
+Se observa que las variables Rooms, Bathroom, Distance, Lattitude y Longitud son las más correlacionadas con el Precio.
+
+La variable Distance presenta correlación negativa con el Precio. A mayor distancia del centro de negocios de Melbourne menor será el precio y viceversa.
+
+Las variables Rooms y Bathroom también presentan alta correlación entre ellas, cuando el número de habitaciones de la vivienda es elevado también lo es el de baños.
+
 ```{r}
-numvars <- sapply(house_data, class) %in% c("integer","numeric")
-C <- cor(house_data[,numvars])
+numvars <- sapply(fdata, class) %in% c("integer","numeric")
+C <- cor(fdata[,numvars])
 corrplot::corrplot(C, method = "circle")
 ```
 
-Segun el analisis anterior decidimos seleccionar un subconjunto de variables mas influyentes en el precio para hacer un analisis de prediccion de precios mediante un modelo de regresion lineal.
+
+Para el modelo, se decide cambiar la columna de Rooms a factor debido a que se observa un comportamiento similar en cuanto al precio en los registros de 7 o más habitaciones, por tanto se toma la decisión de agruparlos y cambiar la columna a factor.
 
 ```{r}
-fdata = select(house_data, Regionname, Rooms, Car, Type, Distance, Price)
+fdata$Rooms <- as.factor(fdata$Rooms)
+levels(fdata$Rooms) = c("1", "2", "3", "4", "5", "6", "7+", "7+", "7+", "7+")
+levels(fdata$Rooms)
+```
+
+Siguiendo la misma lógica, se aplica un proceso similar sobre Bathroom para agrupar más los registros y convertir la variable a factor.
+
+```{r}
+fdata$Bathroom <- as.factor(fdata$Bathroom)
+levels(fdata$Bathroom) = c("0","1", "2", "3", "4", "5", "6+", "6+", "6+", "6+")
+levels(fdata$Bathroom)
 ```
 
 ```{r}
-# Construyendo el modelo
-modelo = lm(Price ~ ., data = fdata)
-modelo$coefficients
+table(fdata$Bathroom)
 ```
+
+
+Se estudia la variable Landsize y se observa que presenta numerosos outliers que podrían influir negativamente a la hora de proporcionar predicciones con el modelo.
+Se guardan los outliers en la variable landsize_outliers.
 
 ```{r}
-summary(modelo)
+bxp_landsize <- boxplot(fdata$Landsize, plot = FALSE)
+landsize_outliers <- bxp_landsize$out
 ```
+
+Existen algunos outliers superiores a 50000 y se procede con su eliminación:
 
 ```{r}
-# normalidad de los residuo
-plotModelo = plot(modelo, which = 2, pch=19)
-qqline(modelo$residuals, col="blue")   
+fdata = fdata %>%
+  filter(Landsize < 50000)
 ```
 
 
+Se va a realizar la predicción utilizando regresión lineal pero utilizando dos funciones diferentes (train y lm).
+
+Se crean los sets de training y test con una distribución aleatoria del 80/20 de las muestras.
 
 ```{r}
-plotModelo = plot(modelo, which = 1, pch=19, lwd= 12)
-segments(x0 = c(2.3, 2.3), y0 = c(1, -1), x1 = c(3.7, 3.7), y1 = c(3, -2), 
-         lty=3, lwd=12, col="blue")
+set.seed(150) # Para replicación
+trainIndex <- createDataPartition(fdata$Price,   #createDataPartition creates proportional partitions
+                                  p = 0.8,      #split probability for training
+                                  list = FALSE, #Avoid output as a list
+                                  times = 1)    #only one partition
+#obtain training and validation sets
+fTR <- fdata[trainIndex,]
+fTS <- fdata[-trainIndex,]
 ```
 
-```{r}
-# Gráfico scale-location. 
-plotModelo = plot(modelo, which = 3, pch=19)
-```
+Se realiza cross-validation con 10 folds para el trainControl.
 
 ```{r}
-# Usando predict
-predict(modelo, newdata = data.frame(Regionname= 'Southern Metropolitan', Rooms=4, Car='YES', Type='h' , Distance=43))
+ctrl_tune <- trainControl(method = "cv",
+                          number = 10,
+                          summaryFunction = defaultSummary,    #Performance summary for comparing models in hold-out samples
+                          returnResamp = "final",              #Return final information about resampling
+                          savePredictions = TRUE)              #save predictions
 ```
+
+Se procede con el entrenamiento del modelo de Regresión Lineal para el training set.
+
+```{r}
+set.seed(150)
+lm.fit = train(form = Price~.,
+               data = fTR, 
+               method = "lm",
+               tuneGrid = data.frame(intercept = TRUE), 
+               preProcess = c("center","scale"),
+               trControl = ctrl_tune, 
+               metric = "RMSE")
+lm.fit #information about the resampling settings
+summary(lm.fit)  #information about the model trained
+
+#Evaluate the model with training sets and diagnosis
+fTR_eval = fTR
+fTR_eval$lm_pred = predict(lm.fit,  newdata = fTR)  
+fTS_eval = fTS
+fTS_eval$lm_pred = predict(lm.fit,  newdata = fTS)  
+```
+
+En los resultados del modelo se puede ver que todas las variables seleccionadas son importantes (p-valor muy pequeño), excepto las variables MethodSA, MethodSP, Bathroom1 y Propertycount. 
+Se obtiene un error R-squared de 0.5977.
+
+Mediante el siguiente gráfico se muestran los residuos del modelo entrenado:
+
+```{r}
+PlotModelDiagnosis(fTR, fTR$Price, fTR_eval$lm_pred,
+                   together = TRUE)
+```
+Se observa que los residuos de Landsize y Price destacan al equivocarse sobre todo en los registros con mayor precio y terreno.
+
+En general el modelo se equivoca más con las viviendas que menos cuestan prediciendo un valor superior. Se equivoca ligeramente también con las viviendas que más cuestan con un comportamiento similar, es decir, se equivoca en los extremos. Para los registros intermedios el modelo tiene mejor capacidad de predicción.
+
+Se calcula el error RMSE para el training y el test set.
+
+```{r}
+#Training and validation errors
+caret::RMSE(fTR_eval$lm_pred,fTR_eval$Price)
+caret::RMSE(fTS_eval$lm_pred,fTS_eval$Price)
+```
+
+
+Se va a entrenar el modelo también con la función lm para comprobar los resultados obtenidos.
+
+```{r}
+model_l <- lm(Price ~ .,data = fTR)
+summary(model_l)
+```
+
+Las únicas variables que no salen relevantes son MethodSA, Bathroom1, Bathroom2 y Propertycount (cambia MethodSP por Bathroom1 con respecto al anterior modelo entrenado con la función train). 
+Se obtiene igualmente un R-squared de 0.5977.
+
+
+A continuación, se obtiene el VIF para las diferentes variables y se examina que Regionname tiene un valor de 25, valor elevado que indica que existe colinealidad con otra de las variables. Probamos a retirarla del modelo pero, tras comprobar los resultados tras su eliminación se decide mantenerla ya que es una variable significativa y resulta en mejores predicciones.
+
+```{r}
+vif(model_l)
+```
+
+### Diagnóstico del modelo
+
+En este apartado se van representar varios gráficos para comprobar como de acertado es el modelo con sus predicciones.
+
+```{r}
+plotModelo = plot(model_l, which = 1, pch=19, lwd= 12)
+```
+
+Con este primer gráfico, se ve que los puntos se distribuyen en una banda horizontal de anchucha aproximadamente similar, pero verticalmente no están dispuestos de manera aleatoria como deberían ya que tienen tendencia a situarse en la parte superior del gráfico, lo que indica que el modelo tiende a sobreestimar el precio de las viviendas.
+
+```{r}
+plotModelo = plot(model_l, which = 2, pch=19)
+```
+
+Para esta segunda representación QQ-plot se observa que el modelo no se ajusta a la distribución normal en los extremos, especialmente por la derecha.
+
+```{r}
+plotModelo = plot(model_l, which = 3, pch=19)
+```
+
+Por último, con el gráfico Scale-Location se visualiza la anchura de la nube de puntos que parece que es más o menos homogénea, pero la línea roja no es del todo horizontal debido a una falta de homogeneidad de las varianzas.
+
+
+# Conclusión
+
+A lo largo del documento se ha realizado un análisis exhaustivo de las variables presentes en el dataset de viviendas vendidas en la ciudad de Melbourne, proporcionado gráficas, relaciones interesantes entre ellas e incluso incluyendo mapas de la distribución de las viviendas por su ubicación atendiendo a diferentes condiciones.
+
+También, se han estudiado cómo algunas de las variables tienen más influencias que otras en hacer que el precio de la vivienda aumente o disminuya.
+
+Por último, se ha entrenado un modelo de regresión lineal que proporciona predicciones de precio para datos de viviendas. Este modelo a pesar de tener una precisión perfecta puede ofrecer valores de precio bastante acertados para una vivienda nueva en la ciudad de Melbourne.
 
 
